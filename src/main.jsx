@@ -842,11 +842,11 @@ function AuthGate({ needsSetup, onAuthenticated }) {
 
         <form onSubmit={submit} className="auth-form">
           <label>Identifiant
-            <input value={form.username} onChange={(e) => update('username', e.target.value)} placeholder="ex : mokrane" autoComplete="username" />
+            <input value={form.username} onChange={(e) => update('username', e.target.value)} placeholder="ex : la clef du centre" autoComplete="username" />
           </label>
           {mode === 'setup' && (
             <label>Nom affiché
-              <input value={form.displayName} onChange={(e) => update('displayName', e.target.value)} placeholder="ex : Mokrane" />
+              <input value={form.displayName} onChange={(e) => update('displayName', e.target.value)} placeholder="ex : LA CLEF DU CENTRE" />
             </label>
           )}
           <label>Mot de passe
