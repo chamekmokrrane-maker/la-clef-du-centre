@@ -5,9 +5,24 @@ import './styles.css';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+function createSupabaseSafeClient() {
+  try {
+    const url = String(SUPABASE_URL || '').trim();
+    const key = String(SUPABASE_KEY || '').trim();
+    if (!url || !key || url.includes('TON-PROJET') || key.includes('TA_CLE')) return null;
+    return createClient(url, key);
+  } catch (error) {
+    console.error('Configuration Supabase invalide', error);
+    return null;
+  }
+}
+
+const supabase = createSupabaseSafeClient();
 
 const LOCAL_KEY = 'la_clef_du_centre_facturation_v3';
+const AUTH_SESSION_KEY = 'la_clef_auth_session_v1';
+const LOCAL_USERS_KEY = 'la_clef_local_users_v1';
 const OLD_LOCAL_KEYS = ['la_clef_du_centre_facturation_v2', 'la_clef_du_centre_facturation_v1'];
 const DEFAULT_CONDITIONS = `• 40% à la signature du devis.\n• 30% en cours des travaux.\n• 30% en fin des travaux.`;
 const DEFAULT_COMPANY = {
@@ -20,6 +35,146 @@ const DEFAULT_COMPANY = {
   tva: '',
   logoDataUrl: ''
 };
+
+function normalizeUsername(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, '-');
+}
+
+function getStoredSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.user?.username) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function storeSession(user) {
+  const session = { user, connectedAt: new Date().toISOString() };
+  localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+  return session;
+}
+
+function clearSession() {
+  localStorage.removeItem(AUTH_SESSION_KEY);
+}
+
+async function sha256(text) {
+  const bytes = new TextEncoder().encode(String(text || ''));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getLocalUsers() {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_USERS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function setLocalUsers(users) {
+  localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+}
+
+async function appHasUsers() {
+  if (supabase) {
+    const { data, error } = await supabase.rpc('la_clef_has_users');
+    if (!error) return Boolean(data);
+    console.warn('Vérification comptes Supabase impossible, bascule locale', error);
+  }
+  return getLocalUsers().length > 0;
+}
+
+async function createFirstAdminAccount({ username, password, displayName }) {
+  const cleanUsername = normalizeUsername(username);
+  const cleanName = String(displayName || username || '').trim() || cleanUsername;
+  if (!cleanUsername) throw new Error('Identifiant obligatoire.');
+  if (String(password || '').length < 4) throw new Error('Le mot de passe doit contenir au minimum 4 caractères.');
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('la_clef_create_first_admin', {
+      p_username: cleanUsername,
+      p_password: password,
+      p_display_name: cleanName
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('Création du compte impossible.');
+    return { id: row.id, username: row.username, displayName: row.display_name || cleanName, role: row.role || 'admin' };
+  }
+
+  const users = getLocalUsers();
+  if (users.length > 0) throw new Error('Un compte existe déjà. Connecte-toi avec ce compte.');
+  const passwordHash = await sha256(password);
+  const user = { id: makeId(), username: cleanUsername, displayName: cleanName, role: 'admin', passwordHash, active: true };
+  setLocalUsers([user]);
+  return { id: user.id, username: user.username, displayName: user.displayName, role: user.role };
+}
+
+async function loginAccount({ username, password }) {
+  const cleanUsername = normalizeUsername(username);
+  if (!cleanUsername || !password) throw new Error('Identifiant et mot de passe obligatoires.');
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('la_clef_login', {
+      p_username: cleanUsername,
+      p_password: password
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('Identifiant ou mot de passe incorrect.');
+    return { id: row.id, username: row.username, displayName: row.display_name || row.username, role: row.role || 'admin' };
+  }
+
+  const passwordHash = await sha256(password);
+  const user = getLocalUsers().find((item) => item.username === cleanUsername && item.passwordHash === passwordHash && item.active !== false);
+  if (!user) throw new Error('Identifiant ou mot de passe incorrect.');
+  return { id: user.id, username: user.username, displayName: user.displayName || user.username, role: user.role || 'admin' };
+}
+
+async function adminCreateAccount({ adminUsername, adminPassword, username, password, displayName, role }) {
+  const cleanUsername = normalizeUsername(username);
+  const cleanAdmin = normalizeUsername(adminUsername);
+  const cleanName = String(displayName || username || '').trim() || cleanUsername;
+  const finalRole = role === 'utilisateur' ? 'utilisateur' : 'admin';
+  if (!cleanUsername) throw new Error('Identifiant du nouveau compte obligatoire.');
+  if (String(password || '').length < 4) throw new Error('Le mot de passe doit contenir au minimum 4 caractères.');
+  if (!adminPassword) throw new Error('Entre le mot de passe admin pour confirmer la création.');
+
+  if (supabase) {
+    const { data, error } = await supabase.rpc('la_clef_admin_create_user', {
+      p_admin_username: cleanAdmin,
+      p_admin_password: adminPassword,
+      p_username: cleanUsername,
+      p_password: password,
+      p_display_name: cleanName,
+      p_role: finalRole
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('Création du compte impossible.');
+    return row;
+  }
+
+  const users = getLocalUsers();
+  const adminHash = await sha256(adminPassword);
+  const admin = users.find((item) => item.username === cleanAdmin && item.passwordHash === adminHash && item.role === 'admin' && item.active !== false);
+  if (!admin) throw new Error('Mot de passe admin incorrect.');
+  if (users.some((item) => item.username === cleanUsername)) throw new Error('Cet identifiant existe déjà.');
+  const passwordHash = await sha256(password);
+  const user = { id: makeId(), username: cleanUsername, displayName: cleanName, role: finalRole, passwordHash, active: true };
+  setLocalUsers([...users, user]);
+  return user;
+}
 
 function tableFor(type) {
   return type === 'devis' ? 'la_clef_devis' : 'la_clef_factures';
@@ -642,7 +797,108 @@ async function downloadDocumentPdf(currentDocument) {
   pdf.save(documentFileName(currentDocument));
 }
 
-function Header({ view, setView, syncStatus }) {
+
+function AuthGate({ needsSetup, onAuthenticated }) {
+  const [mode, setMode] = useState(needsSetup ? 'setup' : 'login');
+  const [form, setForm] = useState({ username: '', displayName: '', password: '' });
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    setMode(needsSetup ? 'setup' : 'login');
+  }, [needsSetup]);
+
+  function update(field, value) {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setLoading(true);
+    setMessage('');
+    try {
+      const user = mode === 'setup'
+        ? await createFirstAdminAccount(form)
+        : await loginAccount(form);
+      storeSession(user);
+      onAuthenticated(user);
+    } catch (error) {
+      setMessage(error.message || 'Connexion impossible.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="auth-screen">
+      <section className="auth-card">
+        <div className="auth-brand">
+          <img src="/logo.png" alt="Logo" />
+          <div>
+            <h1>LA CLEF DU CENTRE</h1>
+            <p>{mode === 'setup' ? 'Création du premier compte administrateur' : 'Connexion au logiciel de facturation'}</p>
+          </div>
+        </div>
+
+        <form onSubmit={submit} className="auth-form">
+          <label>Identifiant
+            <input value={form.username} onChange={(e) => update('username', e.target.value)} placeholder="ex : mokrane" autoComplete="username" />
+          </label>
+          {mode === 'setup' && (
+            <label>Nom affiché
+              <input value={form.displayName} onChange={(e) => update('displayName', e.target.value)} placeholder="ex : Mokrane" />
+            </label>
+          )}
+          <label>Mot de passe
+            <input type="password" value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="Mot de passe" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+          </label>
+
+          {message && <div className="auth-error">{message}</div>}
+          <button className="primary auth-submit" type="submit" disabled={loading}>{loading ? 'Patiente...' : (mode === 'setup' ? 'Créer le compte admin' : 'Se connecter')}</button>
+        </form>
+
+        <p className="auth-help">
+          {mode === 'setup'
+            ? 'Ce premier compte restera connecté après actualisation du site. Tu pourras ensuite créer d’autres comptes depuis le module Entreprise.'
+            : 'Après connexion, l’actualisation de la page ne déconnecte pas le compte.'}
+        </p>
+      </section>
+    </main>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('Erreur application', error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="auth-screen">
+          <section className="auth-card">
+            <h1>Erreur de chargement</h1>
+            <p>Le site a rencontré une erreur au démarrage. Vérifie les variables Supabase dans Render puis relance le déploiement.</p>
+            <div className="auth-error">{this.state.error.message}</div>
+            <button onClick={() => window.location.reload()}>Recharger</button>
+          </section>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function Header({ view, setView, syncStatus, appUser, onLogout }) {
   return (
     <header className="topbar no-print">
       <div className="brand-mini">
@@ -659,15 +915,22 @@ function Header({ view, setView, syncStatus }) {
         <button className={view === 'archives-devis' ? 'active' : ''} onClick={() => setView('archives-devis')}>Archives devis</button>
         <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>Entreprise</button>
       </nav>
-      <span className={`sync-pill ${supabase ? 'online' : 'local'}`}>{syncStatus}</span>
+      <div className="topbar-right">
+        <span className={`sync-pill ${supabase ? 'online' : 'local'}`}>{syncStatus}</span>
+        <span className="user-pill">{appUser?.displayName || appUser?.username} • {appUser?.role}</span>
+        <button className="small" onClick={onLogout}>Déconnexion</button>
+      </div>
     </header>
   );
 }
 
-function CompanySettings({ company, setCompany, onSave, saving }) {
+function CompanySettings({ company, setCompany, onSave, saving, appUser }) {
   function update(field, value) {
     setCompany((prev) => ({ ...prev, [field]: value }));
   }
+
+  const [accountForm, setAccountForm] = useState({ username: '', displayName: '', password: '', role: 'utilisateur', adminPassword: '' });
+  const [accountSaving, setAccountSaving] = useState(false);
 
   function importLogo(event) {
     const file = event.target.files?.[0];
@@ -675,6 +938,35 @@ function CompanySettings({ company, setCompany, onSave, saving }) {
     const reader = new FileReader();
     reader.onload = () => update('logoDataUrl', reader.result);
     reader.readAsDataURL(file);
+  }
+
+  function updateAccount(field, value) {
+    setAccountForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleCreateAccount(event) {
+    event.preventDefault();
+    if (appUser?.role !== 'admin') {
+      alert('Seul un administrateur peut créer un compte.');
+      return;
+    }
+    setAccountSaving(true);
+    try {
+      await adminCreateAccount({
+        adminUsername: appUser.username,
+        adminPassword: accountForm.adminPassword,
+        username: accountForm.username,
+        password: accountForm.password,
+        displayName: accountForm.displayName,
+        role: accountForm.role
+      });
+      setAccountForm({ username: '', displayName: '', password: '', role: 'utilisateur', adminPassword: '' });
+      alert('Compte créé avec succès.');
+    } catch (error) {
+      alert(`Erreur création compte : ${error.message}`);
+    } finally {
+      setAccountSaving(false);
+    }
   }
 
   return (
@@ -703,6 +995,28 @@ function CompanySettings({ company, setCompany, onSave, saving }) {
           <img src={company.logoDataUrl || '/logo.png'} alt="Logo entreprise" />
           <p>Logo affiché en haut à gauche sur chaque facture et chaque devis. Tu peux garder celui fourni ou importer une autre version.</p>
         </div>
+      </section>
+
+      <section className="card large-card">
+        <div className="section-title">
+          <div>
+            <h2>Comptes de connexion</h2>
+            <p>Crée un identifiant et un mot de passe pour accéder au logiciel. Le compte reste connecté après actualisation.</p>
+          </div>
+        </div>
+
+        {appUser?.role !== 'admin' ? (
+          <p className="empty">Seul un compte administrateur peut créer d’autres comptes.</p>
+        ) : (
+          <form className="account-grid" onSubmit={handleCreateAccount}>
+            <label>Identifiant du nouveau compte<input value={accountForm.username} onChange={(e) => updateAccount('username', e.target.value)} placeholder="ex : salarie1" /></label>
+            <label>Nom affiché<input value={accountForm.displayName} onChange={(e) => updateAccount('displayName', e.target.value)} placeholder="ex : Ahmed" /></label>
+            <label>Mot de passe du nouveau compte<input type="password" value={accountForm.password} onChange={(e) => updateAccount('password', e.target.value)} /></label>
+            <label>Type de compte<select value={accountForm.role} onChange={(e) => updateAccount('role', e.target.value)}><option value="utilisateur">Utilisateur</option><option value="admin">Admin</option></select></label>
+            <label>Ton mot de passe admin pour confirmer<input type="password" value={accountForm.adminPassword} onChange={(e) => updateAccount('adminPassword', e.target.value)} /></label>
+            <div className="account-action"><button className="primary" type="submit" disabled={accountSaving}>{accountSaving ? 'Création...' : 'Créer le compte'}</button></div>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -1123,6 +1437,9 @@ function Archives({ type, documents, setFactureDocument, setDevisDocument, setDo
 }
 
 function App() {
+  const [appUser, setAppUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [view, setView] = useState('factures');
   const [company, setCompany] = useState(DEFAULT_COMPANY);
   const [factures, setFactures] = useState([]);
@@ -1140,6 +1457,29 @@ function App() {
   }
 
   useEffect(() => {
+    async function checkAuth() {
+      try {
+        const usersExist = await appHasUsers();
+        setNeedsSetup(!usersExist);
+        const session = getStoredSession();
+        if (session?.user?.username && usersExist) {
+          setAppUser(session.user);
+        }
+      } catch (error) {
+        console.error('Contrôle connexion impossible', error);
+        const usersExist = getLocalUsers().length > 0;
+        setNeedsSetup(!usersExist);
+        const session = getStoredSession();
+        if (session?.user?.username && usersExist) setAppUser(session.user);
+      } finally {
+        setAuthChecked(true);
+      }
+    }
+    checkAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!appUser) return;
     async function boot() {
       try {
         const loadedCompany = await loadCompany();
@@ -1166,7 +1506,7 @@ function App() {
       }
     }
     boot();
-  }, []);
+  }, [appUser]);
 
   async function handleSaveCompany() {
     setSavingCompany(true);
@@ -1180,13 +1520,33 @@ function App() {
     }
   }
 
+  function handleAuthenticated(user) {
+    setAppUser(user);
+    setNeedsSetup(false);
+  }
+
+  function handleLogout() {
+    clearSession();
+    setAppUser(null);
+    setFactureDocument(null);
+    setDevisDocument(null);
+  }
+
+  if (!authChecked) {
+    return <div className="loading">Chargement de la connexion...</div>;
+  }
+
+  if (!appUser) {
+    return <AuthGate needsSetup={needsSetup} onAuthenticated={handleAuthenticated} />;
+  }
+
   if (!factureDocument || !devisDocument) {
     return <div className="loading">Chargement...</div>;
   }
 
   return (
     <>
-      <Header view={view} setView={setView} syncStatus={syncStatus} />
+      <Header view={view} setView={setView} syncStatus={syncStatus} appUser={appUser} onLogout={handleLogout} />
       {view === 'factures' && (
         <DocumentEditor
           type="facture"
@@ -1229,9 +1589,9 @@ function App() {
           setView={setView}
         />
       )}
-      {view === 'settings' && <CompanySettings company={company} setCompany={setCompany} onSave={handleSaveCompany} saving={savingCompany} />}
+      {view === 'settings' && <CompanySettings company={company} setCompany={setCompany} onSave={handleSaveCompany} saving={savingCompany} appUser={appUser} />}
     </>
   );
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
