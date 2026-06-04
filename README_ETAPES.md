@@ -71,13 +71,13 @@ Dans **Environment**, ajouter :
 - `VITE_SUPABASE_ANON_KEY`
 
 
-## Version v4 - Impression couleur, PDF et WhatsApp
+## Version v4 - Impression couleur, PDF et 
 
 Cette version ajoute :
 - l'impression avec couleurs forcées (`print-color-adjust: exact`) ;
 - le bouton `Télécharger PDF` pour les factures et les devis ;
-- le bouton `Envoyer WhatsApp` qui ouvre WhatsApp avec un message préparé pour le client ;
-- le PDF peut ensuite être joint manuellement dans WhatsApp si tu veux envoyer le document complet.
+- le bouton `Envoyer ` qui ouvre  avec un message préparé pour le client ;
+- le PDF peut ensuite être joint manuellement dans  si tu veux envoyer le document complet.
 
 Si Chrome imprime encore sans couleurs, dans la fenêtre d'impression clique sur `Plus de paramètres`, puis active `Graphiques d'arrière-plan`.
 

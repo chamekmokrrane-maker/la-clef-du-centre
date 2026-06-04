@@ -31,7 +31,6 @@ button {
 button:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(15, 23, 42, 0.10); }
 button.primary { background: var(--blue); color: white; border-color: var(--blue); }
 button.success { background: var(--success); color: #fff; border-color: var(--success); }
-button.whatsapp { background: #128c7e; color: #fff; border-color: #128c7e; }
 button.pdf { background: #1e293b; color: #fff; border-color: #1e293b; }
 button.danger { color: var(--danger); border-color: #fecaca; background: #fff7f7; }
 button.small { padding: 7px 10px; border-radius: 8px; }

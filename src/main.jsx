@@ -468,41 +468,6 @@ function documentFileName(currentDocument) {
   return `${typeLabel}-${number}-${client}.pdf`;
 }
 
-function normalizeWhatsappPhone(phone) {
-  const digits = String(phone || '').replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('00')) return digits.slice(2);
-  if (digits.startsWith('33')) return digits;
-  if (digits.startsWith('0')) return `33${digits.slice(1)}`;
-  return digits;
-}
-
-function buildWhatsappMessage(currentDocument) {
-  const totals = calculateTotals(currentDocument);
-  const title = labelForType(currentDocument.type).toLowerCase();
-  const clientName = currentDocument.client?.name || 'Madame, Monsieur';
-  const company = currentDocument.companySnapshot || DEFAULT_COMPANY;
-
-  const details = (currentDocument.interventions || [])
-    .map((intervention, index) => {
-      const lines = (intervention.lines || [])
-        .filter((line) => line.description || safeNumber(line.unitHt) || safeNumber(line.quantity))
-        .map((line) => `- ${line.description || 'Intervention'} : ${safeNumber(line.quantity)} x ${money(line.unitHt)} = ${money(calculateLine(line))}`)
-        .join('\n');
-      return `${index + 1}. ${intervention.title || `Intervention ${index + 1}`}\n${lines}`;
-    })
-    .join('\n\n');
-
-  return `Bonjour ${clientName},\n\nVoici votre ${title} n° ${currentDocument.numero} du ${formatDateFr(currentDocument.date)}.\n\n${details}\n\nTotal HT : ${money(totals.totalHt)}\nTVA ${totals.tvaRate}% : ${money(totals.tva)}\nTotal TTC : ${money(totals.totalTtc)}\n\nCordialement,\n${company.name}\n${[company.phone1, company.phone2].filter(Boolean).join(' / ')}`;
-}
-
-function openWhatsappForDocument(currentDocument) {
-  const text = encodeURIComponent(buildWhatsappMessage(currentDocument));
-  const phone = normalizeWhatsappPhone(currentDocument.client?.phone);
-  const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
-  window.open(url, '_blank', 'noopener,noreferrer');
-}
-
 function pdfText(pdf, text, x, y, options = {}) {
   const value = String(text || '');
   pdf.text(value, x, y, options);
@@ -1141,14 +1106,6 @@ function DocumentEditor({ type, document, setDocument, company, refreshDocuments
     }
   }
 
-  function handleWhatsapp() {
-    const currentDocument = { ...document, type, companySnapshot: company, totals };
-    if (!normalizeWhatsappPhone(currentDocument.client?.phone)) {
-      alert('Le téléphone client est vide. WhatsApp va quand même s’ouvrir avec le message, mais sans destinataire sélectionné.');
-    }
-    openWhatsappForDocument(currentDocument);
-  }
-
   return (
     <main className="workspace">
       <section className="editor-panel no-print">
@@ -1163,7 +1120,6 @@ function DocumentEditor({ type, document, setDocument, company, refreshDocuments
           <button className="success" onClick={() => saveCurrent('cloture')} disabled={saving}>Clôturer avec calcul final</button>
           <button onClick={() => window.print()}>Imprimer</button>
           <button className="pdf" onClick={handleDownloadPdf} disabled={exporting}>{exporting ? 'Téléchargement...' : 'Télécharger PDF'}</button>
-          <button className="whatsapp" onClick={handleWhatsapp}>Envoyer WhatsApp</button>
         </div>
 
         <div className="totals-strip">
