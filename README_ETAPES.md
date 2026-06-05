@@ -62,7 +62,7 @@ git push -u origin main
 
 Créer un **Static Site** puis mettre :
 
-- Build Command : `npm install && npm run build`
+- Build Command : `npm install --no-audit --no-fund && npm run build`
 - Publish Directory : `dist`
 
 Dans **Environment**, ajouter :
@@ -102,3 +102,17 @@ Supabase ne change pas entre la v3 et la v4 : si tu as déjà collé le SQL de l
 - Génération PDF directe et plus fiable avec jsPDF.
 - Le PDF reste sur une seule page quand le contenu tient sur une seule page, puis ajoute une page seulement si nécessaire.
 - Les couleurs du modèle sont directement dessinées dans le PDF.
+
+
+## Correction Render v10
+
+Cette version corrige le problème `vite: not found` sur Render.
+
+Réglages Render recommandés :
+
+- NODE_VERSION = 20.19.5
+- NODE_MODULES_CACHE = false
+- Build Command = npm install --no-audit --no-fund && npm run build
+- Publish Directory = dist
+
+Important : l'ancien fichier `package-lock.json` doit être supprimé avant de pousser sur GitHub.

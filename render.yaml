@@ -2,5 +2,10 @@ services:
   - type: web
     name: la-clef-du-centre-facturation
     env: static
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --no-audit --no-fund && npm run build
     staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.5
+      - key: NODE_MODULES_CACHE
+        value: false
